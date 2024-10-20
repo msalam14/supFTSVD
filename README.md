@@ -17,8 +17,9 @@ devtools::install_github("https://github.com/msalam14/supFTSVD")
 ```
 
 - This vignette analyzes the food and resulting microbial metabolite
-  (FARMM) data (Tanes et al. 2021)
-- 
+  (FARMM) data (Tanes et al. 2021). The data set used in this
+  illustration can be downloaded from
+  https://github.com/syma-research/microTensor/tree/main/data/FARMM.
 
 <div id="refs" class="references csl-bib-body hanging-indent"
 entry-spacing="0">

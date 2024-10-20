@@ -2,7 +2,8 @@
 % Please edit documentation in R/supFTSVD.R
 \name{supFTSVD}
 \alias{supFTSVD}
-\title{Supervised functional singular value decomposition}
+\title{Supervised functional singular value decomposition for high-dimensional 
+multivariate functional data.}
 \usage{
 supFTSVD(
   datlist,

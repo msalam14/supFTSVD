@@ -19,6 +19,50 @@ To install the package, run the following codes
 devtools::install_github("https://github.com/msalam14/supFTSVD")
 ```
 
--   This vignette analyzes the food and resulting microbial metabolite (FARMM) data [@tanes2021role]. 
+-   This vignette analyzes the food and resulting microbial metabolite (FARMM) data [@tanes2021role]. The data set used in this illustration can be downloaded from https://github.com/syma-research/microTensor/tree/main/data/FARMM.
 
--   
+- Calling necessary R-packages
+
+```{r}
+#| echo: FALSE
+#| message: false
+#| warning: false
+library(tidyverse)
+library(dplyr)
+library(gridExtra)
+library(ggplot2)
+library(factoextra)
+library(glmnet)
+library(rsvd)
+library(ggpubr)
+library(matrixcalc)
+library(supFTSVD)
+```
+
+- Loading the data files
+
+```{r}
+data_dir<-"data/FARMM/"
+load(paste(data_dir,"mat_count.RData",sep="")) # meta data
+load(paste(data_dir,"df_samples.RData",sep="")) # OTU data 
+count_all<-t(mat_count)
+meta_all<-df_samples
+```
+
+- Extracting the meta data
+
+```{r}
+meta_uni<-meta_all %>%
+  dplyr::select(SubjectID,study_group,BMI,Age) %>%
+  distinct_all() %>%
+  mutate(Vegan=as.numeric(study_group=="Vegan"),
+         EEN=as.numeric(study_group=="EEN"),
+         Omnivore=as.numeric(study_group=="Omnivore"))
+```
+
+-   Data preparation
+
+```{r}
+datlist_all <- format_ftsvd(count_all, meta_all$study_day,meta_all$SubjectID,threshold=0.95, pseudo_count=0.5,transform='clr')
+svd_all <- log_comp_centralize(datlist_all, 1)
+```
