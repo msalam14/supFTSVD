@@ -935,7 +935,7 @@ predict.ftsvd<-function(obj,new_dat,TimeG){
 
 
 #' Format data table into input of ftsvd   
-
+#'
 #' @param taxon_table A table of read counts, with n rows for samples and p 
 #' columns for taxa.
 #' @param time_point The time stamp of each sample, relative to the start of 
