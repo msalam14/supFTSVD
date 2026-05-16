@@ -25,6 +25,7 @@
 #' @param epsilon Convergence threshold for objective function value
 #' @param KInd is a vector indices to construct the folds for CV. The default is
 #' NULL that indicates that folds will be constructed randomly inside
+#' @importFrom stats approx coef cor lm rnorm
 #' @return a list with following objects:
 #' \itemize{
 #'  \item A.hat : a matrix of dimension n by r containing the values of 
@@ -56,11 +57,10 @@
 #' @example examples/example_supFTSVD.R
 #' @export
 supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, CVPhi=FALSE, K=5, cvT=5, smooth=1e-8,
-                     maxiter=20, epsilon=1e-4,KInd=NULL){
+                     maxiter=20, epsilon=1e-4,KInd=NULL,rsvd_seed=100,conv_criteria="par"){
   n = length(datlist)
   p = nrow(datlist[[1]])-1
   
-  # response in matrix form
   # response in matrix form
   if(is.null(response)){
     response<-matrix(rep(1,n),ncol=1)
@@ -112,6 +112,7 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
   ## initialization of b
   data.unfold = do.call(cbind,lapply(datlist,FUN=function(u){u[-1,]}))
   
+  set.seed(rsvd_seed)
   b.initials <- rsvd(data.unfold, k=r)$u
   b.hat = as.matrix(b.initials[,1:r])
   
@@ -204,6 +205,8 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
   
   sigR<-colMeans((Ahat-Xb)^2)
   
+  sigma_R<-diag(r)
+  diag(sigma_R)<-1/sigR
   
   # Necessary matrices
   Hmat<-lapply(1:n, function(i){
@@ -227,9 +230,10 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
   })
   
   # Subject-specific conditional covariances
-  sw_vcov<-lapply(1:n, function(i){
-    solve(((t(Hmat[[i]])%*%Hmat[[i]])*(1/sig))+(diag(r)*(1/sigR)))
+  sw_vcov<-lapply(Hmat,function(u){
+    solve(crossprod(u)*(1/sig)+sigma_R)
   })
+  
   
   if(r==1){
     varU<-as.matrix(sapply(1:n, function(i){
@@ -252,15 +256,14 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
   
   
   ## objective function value using initial values
-  obj_val<-(-((sum(sapply(Yvec,length)))*log(sig))/2)+
-    (-sum(sapply(1:n,function(i){
-      sum(diag((t(Hmat[[i]])%*%Hmat[[i]])%*%sw_vcov[[i]]))
-    })))/(2*sig)+
-    (-sum(sapply(1:n,FUN = function(i){
-      sum((Yvec[[i]]-Hbeta[[i]]-HUmat[[i]])^2)
-    }))/(2*sig))+
-    (-sum(colSums(conU^2+varU)/sigR))+
-    (-(n/2)*log(sig))
+  obj_val<-Reduce(`+`,lapply(1:n, function(i){
+    t1<-(-((p*mi[i])/2)*log(sig))-sum((1/2)*log(sigR))
+    t2<-sum((Yvec[[i]]-Hbeta[[i]]-HUmat[[i]])^2/(sig))
+    t3<-sum(diag((crossprod(Hmat[[i]])*(1/sig))%*%sw_vcov[[i]]))
+    t4<-sum(diag(sigma_R%*%sw_vcov[[i]]))
+    t5<-sum((conU[i,]^2/sigR))
+    t1-(t2+t3+t4+t5)/2
+  }))
   
   # Starting of the EM based estimation
   t<-1
@@ -387,16 +390,20 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
     }
     
     # update of sigma2_k
-    sk2_new<-colMeans(conU^2)
-    
-    dif<-c(dif,((sk2_new-sigR)^2)/sigR^2)
-    
-    sigR<-sk2_new
+    sk2_new<-colMeans(conU^2+varU)
     
     # to avoid sigma2k=0
     if(any(sk2_new<1e-10)){
       sk2_new[sk2_new<1e-10]<-1e-10
     }
+    
+    
+    dif<-c(dif,((sk2_new-sigR)^2)/sigR^2)
+    
+    
+    sigR<-sk2_new
+    
+    diag(sigma_R)<-1/sigR
     
     
     # update of sigma2
@@ -429,37 +436,42 @@ supFTSVD <- function(datlist, response, interval = NULL, r = 3,resolution=100, C
     sig<-nsig2
     
     # objective function
-    nobj_val<-(-((sum(sapply(Yvec,length)))*log(sig))/2)+
-      (-sum(sapply(1:n,function(i){
-        sum(diag((t(Hmat[[i]])%*%Hmat[[i]])%*%sw_vcov[[i]]))
-      })))/(2*sig)+
-      (-sum(sapply(1:n,FUN = function(i){
-        sum((Yvec[[i]]-Hbeta[[i]]-HUmat[[i]])^2)
-      }))/(2*sig))+
-      (-sum(colSums(conU^2+varU)/sigR))+
-      (-(n/2)*log(sig))+sum(eta_val)
+    nobj_val<-Reduce(`+`,lapply(1:n, function(i){
+      t1<-(-((p*mi[i])/2)*log(sig))-sum((1/2)*log(sigR))
+      t2<-sum((Yvec[[i]]-Hbeta[[i]]-HUmat[[i]])^2/(sig))
+      t3<-sum(diag((crossprod(Hmat[[i]])*(1/sig))%*%sw_vcov[[i]]))
+      t4<-sum(diag(sigma_R%*%sw_vcov[[i]]))
+      t5<-sum((conU[i,]^2/sigR))
+      t1-(t2+t3+t4+t5)/2
+    }))+sum(eta_val)
     
     
-    
+    par_dif<-max(dif)
     dif<-c(dif,nobj_val)
     iter_dif<-rbind(iter_dif,dif)
     
-    if(CVPhi & t<=cvT){
+    if(CVPhi & t<=cvT+1){
       relC<-epsilon+0.05
     } else{
       relC<-(nobj_val-obj_val)/abs(obj_val)
     }
-
-    if(t>cvT & relC<=epsilon) 
-      break
     
+    if(conv_criteria=="par"){
+      c_crit<-par_dif
+    } else{
+      c_crit<-relC
+    }
+    
+    if(t>cvT & c_crit<=epsilon) 
+      break
+
     obj_val<-nobj_val
     
     t <- t+1
     
     # Subject-specific conditional covariances
-    sw_vcov<-lapply(1:n, function(i){
-      solve(((t(Hmat[[i]])%*%Hmat[[i]])*(1/sig))+(diag(r)*(1/sigR)))
+    sw_vcov<-lapply(Hmat,function(u){
+      solve(crossprod(u)*(1/sig)+sigma_R)
     })
     
     if(r==1){
@@ -840,7 +852,8 @@ predict.supFTSVD<-function(obj,designM,new_dat=NULL,TimeG=NULL){
       Reduce(`+`,lapply(1:r, function(k){
         outer(obj$B.hat[,k],obj$Phi.hat[,k])*Ahat[i,k]*obj$Lambda[k]
       }))
-    })) 
+    }),
+    "subEFF" = Ahat) 
   } else{
     predSF<-sapply(1:r, function(k){
       approx(x=obj$time,y=obj$Phi.hat[,k],xout = TimeG,rule = 2)$y
@@ -854,7 +867,8 @@ predict.supFTSVD<-function(obj,designM,new_dat=NULL,TimeG=NULL){
       Reduce(`+`,lapply(1:r, function(k){
         outer(obj$B.hat[,k],predSF[,k])*Ahat[i,k]*obj$Lambda[k]
       }))
-    })) 
+    }),
+    "subEFF" = Ahat) 
   }
 }
 
@@ -870,7 +884,7 @@ predict.supFTSVD<-function(obj,designM,new_dat=NULL,TimeG=NULL){
 #' subjects
 #' @example examples/example_predict_FTSVD.R
 #' @export
-predict.ftsvd<-function(obj,new_dat,TimeG){
+predict.ftsvd<-function(obj,new_dat,TimeG=NULL){
   # number of components in the fitted model
   r<-ncol(obj$A.hat)
   # number of subjects for which prediction will be made
@@ -917,7 +931,7 @@ predict.ftsvd<-function(obj,new_dat,TimeG){
   if(is.null(TimeG)){
     lapply(1:ns,function(i){
       Reduce(`+`,lapply(1:r, function(k){
-        outer(obj$B.hat[,k],obj$Phi.hat[,k])*Ahat[i,k]
+        outer(obj$B.hat[,k],obj$Phi.hat[,k])*(Ahat[i,k]*obj$Lambda[k])
       }))
     }) 
   } else{
@@ -927,7 +941,7 @@ predict.ftsvd<-function(obj,new_dat,TimeG){
     
     lapply(1:ns,function(i){
       Reduce(`+`,lapply(1:r, function(k){
-        outer(obj$B.hat[,k],predSF[,k])*Ahat[i,k]
+        outer(obj$B.hat[,k],predSF[,k])*(Ahat[i,k]*obj$Lambda[k])
       }))
     })
   }
@@ -1041,6 +1055,7 @@ bernoulli_kernel <- function(x, y){
 #' @param smooth a scalar represents the value of tuning parameter
 #' @keywords internal
 #' @noRd
+#' @export
 freg_rkhs <- function(Ly, a.hat, ind_vec, Kmat, Kmat_output, smooth=1e-8){
   A <- Kmat
   for (i in 1:length(Ly)){
@@ -1081,6 +1096,7 @@ freg_rkhs <- function(Ly, a.hat, ind_vec, Kmat, Kmat_output, smooth=1e-8){
 #' splitting automatically if set to NULL
 #' @keywords internal
 #' @noRd
+#' @export
 cv_freg_rkhs<-function(Ly, a.hat, ind_vec, Kmat, Kmat_output, smooth,kfold=5,
                        KInd=NULL){
   A <- Kmat
@@ -1186,4 +1202,220 @@ data_gen_supFTSVD<-function(m_i,Xmatrix,Beta,Xi,PsiF,sing_val,SubE_Var,
        "Xb" = EAval,
        "zeta"=Zeta,
        "singF"=singF)
+}
+
+#' Select a rank for supFTSVD by a modified version of cross-validation approach
+#' in Lock and Li (2018)
+#' 
+#' @param datlist a list with n elements, each is a matrix of dimension p+1 
+#' times m_i. The first row represents time points where measurements were 
+#' obtained. Next p rows represent the function values observed at the time 
+#' points
+#' @param response a matrix of dimension n by q contains the design matrix for 
+#' supervision of the subject loadings
+#' @param interval represents the domain of the function. The default is NULL. 
+#' @param ranks a vector of ranks on which grid search will be made 
+#' @param resolution grid size on which the singular functions will be estimated
+#' @param CVPhi a logical scalar representing whether cross-validation (CV) will be 
+#' performed for determining the smoothness parameters involved with singular 
+#' functions
+#' @param K number of folds for the CV step
+#' @param cvT number of initial iterations at which CV will be performed
+#' @param smooth Smoothing parameter for RKHS norm when CVPhi is FALSE. With 
+#' CVPhi=TRUE, a vector of numeric values for smoothness parameters for grid
+#' search
+#' @param maxiter Maximum number of iteration. Default: 20.
+#' @param epsilon Convergence threshold for objective function value
+#' @param KInd is a vector indices to construct the folds for CV. The default is
+#' NULL that indicates that folds will be constructed randomly inside
+#' @param rsvd_seed supFTSVD uses random svd for computational advantage while
+#' setting inial values for feature loading vector. This seed number will be used
+#' before setting the initial values. It confirms the reproducibility of your results.
+#' @param conv_criteria the default is par which sets the threshold on the 
+#' difference between updated and current estimate at M step to stop the iteration. 
+#' It is computationally expensive; thus we recommend to use "cond_lik" instead of "par". 
+#' The result is not sensitive. 
+#' @param rank_fold number of folds to be used in the cross-validation
+#' @param rfolds_seed seed number to be used in random splitting of the data
+#' @param rc_thresh threshold on test-data likelihood for rank selection
+#' @return a list with following objects:
+#' \itemize{
+#'  \item cv_res : detailed results for different folds
+#'  \item opt_r : optimal rank
+#' }
+#' @example examples/example_cv_rank_supFTSVD.R
+#' @export
+cv_rank_supFTSVD<-function(datlist, response, interval = NULL, 
+                           ranks = c(1:5),resolution=100, CVPhi=FALSE, K=5, cvT=5, 
+                           smooth=1e-8,maxiter=20, epsilon=1e-4,KInd=NULL,
+                           rsvd_seed=100,conv_criteria="par",
+                           rank_fold=5,rfolds_seed=50,rc_thresh=0.05,stratum=NULL){
+  n<-length(datlist)
+  if(!is.null(stratum)){
+    grp_frq<-as.numeric(table(stratum))
+    lv_grp<-as.character(unique(stratum))
+    set.seed(rfolds_seed)
+    SJ_ind<-do.call(c,lapply(seq_len(length(lv_grp)),function(i){
+      sample(1:grp_frq[i],grp_frq[i],replace=FALSE)
+    }))
+    rfolds_indx<-do.call(c,lapply(seq_len(length(lv_grp)),function(i){
+      sj_ind<-sample(1:grp_frq[i],grp_frq[i],replace=FALSE)
+      c(rep(1:rank_fold,each=grp_frq[i]%/%rank_fold),sample(1:rank_fold,grp_frq[i]%%rank_fold,replace = FALSE))
+    }))
+  } else{
+    set.seed(rfolds_seed)
+    SJ_ind<-sample(1:n,n,replace=FALSE)
+    rfolds_indx<-c(rep(1:rank_fold,each=n%/%rank_fold),sample(1:rank_fold,n%%rank_fold,replace = FALSE))
+  }
+  rank_res<-NULL
+  for(r in ranks){
+    crank<-sapply(1:rank_fold, function(g){
+      train_dat<-datlist[sort(SJ_ind[which(rfolds_indx!=g)])]
+      test_dat<-datlist[sort(SJ_ind[which(rfolds_indx==g)])]
+      fit_model<-supFTSVD(datlist=train_dat, response=response[sort(SJ_ind[which(rfolds_indx!=g)]),], interval = interval, 
+                          r = r,resolution=resolution, CVPhi=CVPhi, K=K, cvT=cvT,
+                          smooth=smooth,maxiter=maxiter, epsilon=epsilon,KInd=KInd,
+                          rsvd_seed=rsvd_seed,conv_criteria=conv_criteria)
+      predFIT<-predict.supFTSVD(obj = fit_model,
+                                designM = response[sort(SJ_ind[which(rfolds_indx==g)]),],
+                                new_dat = test_dat)
+      
+      test_Xb<-response[sort(SJ_ind[which(rfolds_indx==g)]),]%*%fit_model$Gamma
+      test_conU<-predFIT$subEFF-test_Xb
+      
+      norm_llik_supFTSVD(datlist = test_dat,
+                         x_matrix = response[sort(SJ_ind[which(rfolds_indx==g)]),],
+                         comp_beta = fit_model$Gamma,
+                         subj_dev = test_conU,
+                         feat_loading = fit_model$B.hat,
+                         sing_func = fit_model$Phi.hat,
+                         sing_func_arg = fit_model$time,
+                         sing_val = fit_model$Lambda,
+                         sigR = fit_model$Sigma2R,
+                         sig = fit_model$Sigma2)
+    })
+    if(r==1){
+      rc<-1
+    } else{
+      rc<-(mean(crank)-mean(orank))/abs(mean(orank))
+    }
+    if(rc<rc_thresh)
+      break
+    orank<-crank
+    rank_res<-rbind(rank_res,crank)
+  }
+  list("cv_res"=rank_res,"opt_r"=ranks[nrow(rank_res)])
+}
+
+
+#' Compute the value of normal likelihood for observed high-dimensional multivariate functional data
+#' 
+#' @param datalist a list with n elements, each is a matrix of dimension p+1 
+#' times m_i. The first row represents time points where measurements were 
+#' obtained. Next p rows represent the function values observed at the time 
+#' points
+#' @param iterval represents the domain of the function. The default is NULL. 
+#' @param x_matrix a matrix of dimension n by q contains the design matrix for 
+#' supervision of the subject loadings
+#' @param comp_beta parameter vector associated with x_matrix
+#' @param subj_dev a matrix of n by r contains subject-specific-deviation
+#' @param feat_loading a matrix of p by r contains feature loadings
+#' @param sing_func a matrix represents the value of r singular functions on a 
+#' smooth grid in the interval
+#' @param sing_val a vector of singular values
+#' @param sigR a vector of dimension r with variances of subject-loading model 
+#' as elements
+#' @param sig error variance
+#' @param smooth_par smoothing parameters used to compute the singular functions;
+#' it is an optional argument
+#' @returns the value of the complete data likelihood for the given data and 
+#' parameters based on normality assumption
+#' @importFrom stats approx coef cor lm rnorm
+#' @example examples/example_norm_llik_supFTSVD.R
+#' @export
+norm_llik_supFTSVD<-function(datlist,x_matrix,comp_beta,subj_dev,
+                                  feat_loading,sing_func,sing_func_arg,sing_val,sigR,sig,smooth_par=0){
+  pj<-nrow(datlist[[1]])-1
+  n = length(datlist)
+  r<-ncol(subj_dev)
+  obs_time<-lapply(datlist,function(u){u[1,]})
+  m_i<-sapply(obs_time,length)
+  
+  
+  # response in matrix form
+  if(!is.matrix(x_matrix)){
+    x_matrix<-matrix(x_matrix,ncol=1)
+  }
+  
+  if(!is.matrix(comp_beta)){
+    comp_beta<-matrix(comp_beta,ncol=1)
+  }
+  
+  
+  # Subject wise vectorized data 
+  Yvec<-lapply(1:n, function(i){
+    as.numeric(datlist[[i]][-1,])
+  })
+  
+  Lt<-obs_time
+  
+  
+  allT<-do.call(c,Lt)
+  
+  pXI<-apply(sing_func,2,function(u){
+    approx(sing_func_arg,u,xout = allT,rule=2)$y
+  })
+  
+  
+  # initial values for error variance
+  Mi<-cumsum(m_i)
+  
+  prdXI<-lapply(1:n,function(w){
+    if(w ==1){
+      as.matrix(pXI[1:Mi[1],])
+    } else{
+      as.matrix(pXI[(Mi[w-1]+1):(Mi[w]),])
+    }
+  })
+  
+  
+  Ahat<-(x_matrix%*%comp_beta)+subj_dev
+  Xb<-x_matrix%*%comp_beta
+  
+  # Necessary matrices (updated)
+  Hmat<-lapply(1:n, function(i){
+    sapply(1:r, function(k){
+      as.numeric(outer(feat_loading[,k],prdXI[[i]][,k]))*sing_val[k]
+    })
+  })
+  
+  
+  ## Subject wise super X matrix
+  Hbeta<-lapply(1:n, function(i){
+    as.numeric(Hmat[[i]]%*%matrix(Xb[i,],ncol=1))
+  })
+  
+  # another necessary matrix
+  HUmat<-lapply(1:n, function(i){
+    as.numeric(Hmat[[i]]%*%matrix(subj_dev[i,],ncol=1))
+  })
+  
+  ####
+  sigma_R<-diag(ncol(subj_dev))
+  diag(sigma_R)<-1/sigR
+
+  # Subject-specific conditional covariances
+  sw_vcov<-lapply(Hmat,function(u){
+    solve(crossprod(u)*(1/sig)+sigma_R)
+  })
+  
+  # objective function
+  Reduce(`+`,lapply(1:n, function(i){
+    t1<-((-pj*m_i[i]/2)*(log(sig)))-sum((1/2)*log(sigR))
+    t2<-sum((Yvec[[i]]-Hbeta[[i]]-HUmat[[i]])^2/(sig))
+    t3<-sum(diag((crossprod(Hmat[[i]])*(1/sig))%*%sw_vcov[[i]]))
+    t4<-sum(diag(sigma_R%*%sw_vcov[[i]]))
+    t5<-sum((subj_dev[i,]^2/sigR))
+    t1-(t2+t3+t4+t5)/2
+  }))+sum(smooth_par)
 }
