@@ -1,3 +1,4 @@
+library(rsvd)
 # feature dimension 
 
 pdim<-c(500)
@@ -45,7 +46,7 @@ bval<<-Bval*outer(rep(1,pdim),1/apply(Bval,2,norm,type="2"))
 
 Mi<-3:8
 
-n<-50
+n<-100
 m_i<-sample(Mi,n,replace = TRUE)
 set.seed(n)
 Vmat<<-cbind(round(runif(n),2),round(rbeta(n,1,1),2))
@@ -57,16 +58,17 @@ data<-data_gen_supFTSVD(m_i=m_i,Xmatrix = Vmat,Beta = gam,Xi = bval,
 
 
 # Reproducibility because of the use of random SVD is controlled by rsvd_seed
-fit_supF<-supFTSVD(datlist = data$data,
-         response = Vmat,
-         interval = NULL,
-         r=2,
-         resolution = 50,
-         CVPhi = TRUE,
-         K = 5,
-         cvT = 2,
-         smooth = exp(seq(-2,2,length.out=10)),
-         maxiter = 100,
-         epsilon = 1e-6,
-         KInd = NULL,rsvd_seed = 25,conv_criteria = "cond_lik")
+cv_fit_supF<-cv_rank_supFTSVD(datlist = data$data,
+                   response = Vmat,
+                   interval = NULL,
+                   ranks = c(1:10),
+                   resolution = 50,
+                   CVPhi = FALSE,
+                   K = 5,
+                   cvT = 2,
+                   smooth = 0.1,
+                   maxiter = 100,
+                   epsilon = 1e-6,
+                   KInd = NULL,rsvd_seed = 25,conv_criteria = "cond_lik")
 
+cv_fit_supF$opt_r

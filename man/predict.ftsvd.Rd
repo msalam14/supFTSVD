@@ -4,7 +4,7 @@
 \alias{predict.ftsvd}
 \title{Prediction using the fitted objects from supFTSVD}
 \usage{
-predict.ftsvd(obj, new_dat, TimeG)
+predict.ftsvd(obj, new_dat, TimeG = NULL)
 }
 \arguments{
 \item{obj}{fitted object by supFTSVD}

@@ -39,6 +39,8 @@ library(matrixcalc)
 library(supFTSVD)
 ```
 
+## FARMM data analysis
+
 - Loading the data files
 
 ```{r}
@@ -75,14 +77,30 @@ resVEC_bmi<-model.matrix(~.-1,data = meta_uni[,-c(1,2,4)])
 resVEC_diet<-model.matrix(~.-1,data = meta_uni[,-c(1,2,5,6,7)])
 ```
 
+- Cross-validation for rank-selection
+
+```{r}
+#| cache: true
+#| eval: false
+cv_res<-cv_rank_supFTSVD(datlist = datlist_all,response = as.matrix(resVEC), 
+                 ranks = 1:10, resolution = 51,CVPhi =TRUE,K=5,
+                 smooth=exp(seq(-5,1,length.out=10)),maxiter = 150, epsilon = 1e-6,
+                 rank_fold = 5,rfolds_seed = 25,rsvd_seed = 100,rc_thresh = 0.001)
+save(cv_res,file="Results/cv_res.RData")
+```
+
+```{r}
+load("Results/cv_res.RData")
+```
+
+
 -   Fitting Supervised FTSVD
 
 ```{r}
 #| cache: true
 #| eval: false
 pt<-proc.time()
-set.seed(75)
-sup_res_ftsvd <- supFTSVD(datlist = svd_all$datlist,response = as.matrix(resVEC), r = 6, resolution = 51,CVPhi = TRUE,K=5,smooth=exp(seq(-5,1,length.out=10)),maxiter = 150)
+sup_res_ftsvd <- supFTSVD(datlist = datlist_all,response = as.matrix(resVEC), r = cv_res$opt_r, resolution = 51,CVPhi = TRUE,K=5,smooth=exp(seq(-5,1,length.out=10)),maxiter = 150,conv_criteria = "cond_like",rsvd_seed = 75,epsilon = 1e-6)
 proc.time()-pt
 ```
 
@@ -220,7 +238,7 @@ singF3<-grp_singF %>%
   xlab("Study day") +
   ylab("Group average loading") +
   theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
-  ggtitle("Component 3")
+  ggtitle("")
 singF4<-grp_singF %>%
   filter(Component=="Comp4") %>%
   ggplot(aes(x=Days,y=Mval,group=Group,color=Group)) +
@@ -239,8 +257,8 @@ singF5<-grp_singF %>%
   geom_point(position=pd) +
   xlab("Study day") +
   ylab("Group average loading") +
-  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
-  ggtitle("Component 5")
+  theme(legend.position = c(0.2,0.8),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
 singF6<-grp_singF %>%
   filter(Component=="Comp6") %>%
   ggplot(aes(x=Days,y=Mval,group=Group,color=Group)) +
@@ -300,7 +318,7 @@ taxa3<-tf_dat %>%
   geom_bar(stat = "identity") +
   xlab("Feature loading") +
   ylab("") +
-  ggtitle("Component 3")
+  ggtitle("")
 ```
 
 
@@ -322,12 +340,13 @@ tax_dat<-do.call(rbind,lapply(rownames(sup_res_ftsvd$B.hat), function(u){tax_fea
 top_feat<-sapply(str_split(tax_dat[order(-abs(sup_res_ftsvd$B.hat[,5])),7][1:10],"_"),function(u){paste(u[1],u[2])})
 tf_dat<-data.frame(TFname=top_feat,TFloadings=
 as.numeric(sup_res_ftsvd$B.hat[order(-abs(sup_res_ftsvd$B.hat[,5])),5][1:10]))
+tf_dat$TFname[9]<-"unclassified_unclassified"
 taxa5<-tf_dat %>%
   ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
   geom_bar(stat = "identity") +
   xlab("Feature loading") +
   ylab("") +
-  ggtitle("Component 5")
+  ggtitle("")
 ```
 
 
@@ -345,9 +364,603 @@ taxa6<-tf_dat %>%
 ```
 
 ```{r}
+ggpubr::ggarrange(slplot3,taxa3,singF3,
+                  slplot5,taxa5,singF5,nrow=2,ncol=3)
+ggsave("Results/cv_farm_res.pdf",height = 6,width = 12,units = "in")
+```
+
+```{r}
 ggpubr::ggarrange(slplot2,taxa2,singF2,
                   slplot4,taxa4,singF4,
                   slplot6,taxa6,singF6,nrow=3,ncol=3)
 ggsave("farm_res.pdf",height = 10,width = 12,units = "in")
+```
+
+## ECAM data analysis
+
+```{r}
+counts0 <- read.csv(file="data/ECAM/otu_count_cleaned.csv", row.names=1)
+metadata <- read.csv(file="data/ECAM/otu_metadata_cleaned.csv", row.names=1)
+taxdata <- read.csv(file="data/ECAM/otu_taxonomy_cleaned.csv", row.name=1)
+```
+
+- Construction of metadata
+
+```{r}
+metauni <- metadata %>%
+  dplyr::select(studyid,delivery,diet) %>%
+  distinct() %>%
+  mutate(Cesarean=ifelse(delivery=="Cesarean",1,0),
+           FFeed=ifelse(diet=="fd",1,0))
+```
+
+- formatting otu data
+
+```{r}
+microbiome.data <- format_ftsvd(counts0, metadata$day_of_life, metadata$studyid, threshold=0.95, pseudo_count=0.5,transform = "clr")
+```
+
+- Construction of design matrix for the subject-loading model
+
+```{r}
+resVEC<-as.matrix(cbind(1,metauni$Cesarean,metauni$FFeed,metauni$FFeed*metauni$Cesarean))
+```
+
+
+```{r}
+ecam_cv_res<-cv_rank_supFTSVD(datlist = microbiome.data,response = resVEC, r = 1:10, resolution = 51,CVPhi = TRUE,K=5,smooth=exp(seq(-5,5,length.out=10)),maxiter = 150,epsilon = 1e-6,rsvd_seed = 35,conv_criteria = "cond_lik",rank_fold = 5,rfolds_seed = 15,rc_thresh = 0.001,stratum=NULL)
+save(ecam_cv_res,file = "Results/ecam_cv_res.RData")
+```
+
+```{r}
+load(file = "Results/ecam_cv_res.RData")
+```
+
+
+
+```{r}
+ecam_sup_res_ftsvd <- supFTSVD(datlist = microbiome.data,response = resVEC, r = ecam_cv_res$opt_r, resolution = 51,CVPhi = TRUE,K=5,smooth=exp(seq(-5,5,length.out=10)),maxiter = 250,rsvd_seed = 35,conv_criteria = "cond_lik",epsilon = 1e-6)
+save(ecam_sup_res_ftsvd,file="Results/ecam_sup_ftsvd.RData")
+```
+
+```{r}
+load("Results/ecam_sup_ftsvd.RData")
+```
+
+
+
+```{r}
+meta_uni<-metauni 
+slplot1<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==1) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 1")
+
+slplot2<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==2) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 2")
+
+slplot3<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==3) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 3")
+
+slplot4<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==4) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 4")
+slplot5<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==5) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 5")
+
+slplot6<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==6) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 6")
+
+slplot7<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==7) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 7")
+
+slplot8<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  filter(Component==8) %>%
+  ggplot(aes(delivery,Loadings)) +
+  geom_boxplot()+
+  xlab("Delivery mode")+
+  ylab("Subject loadings") +
+  ggtitle("Component 8")
+```
+
+```{r}
+slplot1dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==1) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 1")
+
+slplot2dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==2) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 2")
+
+slplot3dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==3) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 3")
+
+slplot4dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==4) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 4")
+slplot5dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==5) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 5")
+
+slplot6dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==6) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 6")
+
+slplot7dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==7) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 7")
+
+
+slplot8dg<-data.frame(ecam_sup_res_ftsvd$A.hat,meta_uni) %>%
+  pivot_longer(Component.1:Component.8,names_to = "Component",names_prefix = "Component.",values_to = "Loadings") %>%
+  mutate(diet=recode(diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding")) %>%
+  filter(Component==8) %>%
+  ggplot(aes(diet,Loadings)) +
+  geom_boxplot()+
+  xlab("Diet group")+
+  ylab("Subject loadings") +
+  ggtitle("Component 8")
+```
+
+```{r}
+ISF<-sapply(1:ncol(ecam_sup_res_ftsvd$A.hat), function(u){
+  as.numeric(t(outer(ecam_sup_res_ftsvd$A.hat[,u],ecam_sup_res_ftsvd$Phi.hat[,u])))
+})
+colnames(ISF)<-paste("Comp",seq_len(ncol(ISF)),sep = "")
+ind_singF<-data.frame(Subject=rep(1:nrow(ecam_sup_res_ftsvd$A.hat),each=length(ecam_sup_res_ftsvd$time)),Days=rep(ecam_sup_res_ftsvd$time,times=nrow(ecam_sup_res_ftsvd$A.hat)),Delivery=rep(meta_uni$delivery,each=length(ecam_sup_res_ftsvd$time)),Diet=rep(meta_uni$diet,each=length(ecam_sup_res_ftsvd$time)),ISF)
+
+# The errorbars overlapped, so use position_dodge to move them horizontally
+pd <- position_dodge(0.1) # move them .05 to the left and right
+
+grp_singF<-ind_singF %>%
+  pivot_longer(Comp1:Comp8,names_to = "Component",values_to = "IndF") %>%
+  group_by(Component,Days,Delivery) %>%
+  summarise(Mval=mean(IndF),Sdval=sd(IndF),Num=n()) %>%
+  mutate(SEval=Sdval/sqrt(Num)) %>%
+  ungroup() 
+
+singF1<-grp_singF %>%
+  filter(Component=="Comp1") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.80,0.80),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank(),legend.text = element_text(size=8))
+  ggtitle("")
+singF2<-grp_singF %>%
+  filter(Component=="Comp2") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.40,0.55),legend.background = element_rect(fill = "transparent"),legend.direction = "horizontal",legend.title = element_blank())+
+  ggtitle("") +
+  scale_color_manual(values=c("purple","brown4"),labels=c("Vaginal","Cesarean"))
+singF3<-grp_singF %>%
+  filter(Component=="Comp3") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.15,0.15),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("") +
+  scale_color_manual(values=c("purple","brown4"),labels=c("Vaginal","Cesarean"))
+singF4<-grp_singF %>%
+  filter(Component=="Comp4") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.25,0.80),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
+singF5<-grp_singF %>%
+  filter(Component=="Comp5") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
+
+singF6<-grp_singF %>%
+  filter(Component=="Comp6") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
+
+singF7<-grp_singF %>%
+  filter(Component=="Comp7") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 7")
+
+singF8<-grp_singF %>%
+  filter(Component=="Comp8") %>%
+  ggplot(aes(x=Days,y=Mval,group=Delivery,color=Delivery)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 8")
+```
+
+
+```{r}
+grp_singF<-ind_singF %>%
+  pivot_longer(Comp1:Comp8,names_to = "Component",values_to = "IndF") %>%
+  group_by(Component,Days,Diet) %>%
+  summarise(Mval=mean(IndF),Sdval=sd(IndF),Num=n()) %>%
+  mutate(SEval=Sdval/sqrt(Num)) %>%
+  ungroup() %>%
+  mutate(Diet=recode(Diet,
+                     "bd"="Breast feeding",
+                     "fd"="Formula feeding"))
+singF1dg<-grp_singF %>%
+  filter(Component=="Comp1") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.80,0.35),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank()) +
+  ggtitle("")
+singF2dg<-grp_singF %>%
+  filter(Component=="Comp2") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 2")
+singF3dg<-grp_singF %>%
+  filter(Component=="Comp3") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.80),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
+singF4dg<-grp_singF %>%
+  filter(Component=="Comp4") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.25,0.80),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 4")
+singF5dg<-grp_singF %>%
+  filter(Component=="Comp5") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.80),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 5")
+singF6dg<-grp_singF %>%
+  filter(Component=="Comp6") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 6")
+
+singF7dg<-grp_singF %>%
+  filter(Component=="Comp7") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.8,0.30),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("Component 7")
+
+singF8dg<-grp_singF %>%
+  filter(Component=="Comp8") %>%
+  ggplot(aes(x=Days,y=Mval,group=Diet,color=Diet)) +
+  geom_errorbar(aes(ymin=Mval-(2*SEval),ymax=Mval+(2*SEval)),colour="gray", width=.1, position=pd) +
+  geom_line(position=pd) +
+  geom_point(position=pd) +
+  xlab("Study day") +
+  ylab("Group average loading") +
+  theme(legend.position = c(0.20,0.15),legend.background = element_rect(fill = "transparent"),legend.direction = "vertical",legend.title = element_blank())+
+  ggtitle("")
+```
+
+```{r}
+tax_dat<-data.frame(TaxGS=paste(taxdata[intersect(rownames(taxdata),rownames(ecam_sup_res_ftsvd$B.hat)),"Genus"],"_",taxdata[intersect(rownames(taxdata),rownames(ecam_sup_res_ftsvd$B.hat)),"Species"],sep = ""),ecam_sup_res_ftsvd$B.hat)
+
+top_feat<-tax_dat %>%
+  mutate(aComponent.1=abs(Component.1)) %>%
+  arrange(-aComponent.1) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+top_feat$TaxGS[c(2,6,7,8,10)]<-c(paste(substr(top_feat$TaxGS[2],1,12),"unclassified",sep=""),"*_unclassified","**_unclassified",paste(substr(top_feat$TaxGS[8],1,12),"unclassified*",sep=""),paste(substr(top_feat$TaxGS[10],2,13),substr(top_feat$TaxGS[10],15,21),sep=""))
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.1))
+taxa1<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("")
+```
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.2=abs(Component.2)) %>%
+  arrange(-aComponent.2) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+top_feat$TaxGS[c(1,4,5,6,7,8,9,10)]<-c(paste(substr(top_feat$TaxGS[1],1,11),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[1],1,11),"_unclassified*",sep=""),paste(substr(top_feat$TaxGS[5],1,15),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[1],1,11),"_unclassified**",sep=""),paste(substr(top_feat$TaxGS[1],1,11),"_unclassified***",sep=""),paste(substr(top_feat$TaxGS[1],1,11),"_unclassified****",sep=""),paste(substr(top_feat$TaxGS[1],1,11),"_unclassified*****",sep=""),paste(top_feat$TaxGS[10],"*",sep=""))
+
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.2))
+taxa2<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("")
+```
+
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.3=abs(Component.3)) %>%
+  arrange(-aComponent.3) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+strsp<-str_split(top_feat$TaxGS,"_")
+strsp_s<-sapply(1:10, function(i){ifelse(strsp[[i]][2]=="NA",paste("unclassified",paste(rep("*",i-1),collapse=""),sep=""),strsp[[i]][2])})
+
+top_feat$TaxGS<-paste(sapply(strsp,function(i){i[1]}),strsp_s,sep="_")
+top_feat$TaxGS[10]<-paste(top_feat$TaxGS[10],"*",sep="")
+
+#top_feat$TaxGS<-c(paste(substr(top_feat$TaxGS[1],1,12),"unclassified",sep=""),"*_unclassified",paste(substr(top_feat$TaxGS[3],1,6),"_unclassified",sep=""),"**_unclassified",top_feat$TaxGS[5],paste(substr(top_feat$TaxGS[6],1,12),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[7],2,12),substr(top_feat$TaxGS[7],14,22),sep=""),"***_unclassified",top_feat$TaxGS[9],top_feat$TaxGS[10])
+
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.3))
+taxa3<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("")
+```
+
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.4=abs(Component.4)) %>%
+  arrange(-aComponent.4) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+top_feat$TaxGS<-c(top_feat$TaxGS[1],paste(substr(top_feat$TaxGS[2],1,12),"unclassified",sep=""),paste(substr(top_feat$TaxGS[2],1,12),"unclassified*",sep=""),top_feat$TaxGS[4],paste(substr(top_feat$TaxGS[5],1,16),"unclassified"),paste(substr(top_feat$TaxGS[1],1,12),"unclassified**",sep=""),paste(substr(top_feat$TaxGS[7],1,10),"unclassified",sep=""),"*_unclassified",top_feat$TaxGS[9],paste(substr(top_feat$TaxGS[1],1,12),"unclassified***",sep=""))
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.4))
+taxa4<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("Component 4")
+```
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.5=abs(Component.5)) %>%
+  arrange(-aComponent.5) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+top_feat$TaxGS<-c(top_feat$TaxGS[1],paste(substr(top_feat$TaxGS[2],1,10),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[3],1,5),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[4],2,13),"_unclassified",sep=""),"*_unclassified",paste(substr(top_feat$TaxGS[6],1,9),"_unclassified",sep=""),"**_unclassified","***_unclassified",paste(substr(top_feat$TaxGS[9],1,12),"_unclassified*",sep=""),top_feat$TaxGS[10])
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.5))
+taxa5<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("Component 5")
+```
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.6=abs(Component.6)) %>%
+  arrange(-aComponent.6) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+top_feat$TaxGS<-c(paste(substr(top_feat$TaxGS[1],1,11),"_unclassified",sep=""),top_feat$TaxGS[2],paste(substr(top_feat$TaxGS[3],1,11),"_unclassified*",sep=""),paste(substr(top_feat$TaxGS[4],1,11),"_unclassified",sep=""),paste(substr(top_feat$TaxGS[5],1,11),"_unclassified**",sep=""),paste(substr(top_feat$TaxGS[6],1,11),"_unclassified***",sep=""),paste(substr(top_feat$TaxGS[7],1,11),"_unclassified****",sep=""),paste(substr(top_feat$TaxGS[8],1,11),"_unclassified*****",sep=""),paste(substr(top_feat$TaxGS[9],1,11),"_unclassified******",sep=""),paste(substr(top_feat$TaxGS[10],1,11),"_unclassified*******",sep=""))  
+  
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.6))
+taxa6<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("Component 6")
+```
+
+```{r}
+top_feat<-tax_dat %>%
+  mutate(aComponent.8=abs(Component.8)) %>%
+  arrange(-aComponent.8) %>%
+  mutate(Id=row_number()) %>%
+  filter(Id<=10)
+
+strsp<-str_split(top_feat$TaxGS,"_")
+strsp_f<-sapply(1:10, function(i){ifelse(strsp[[i]][1]=="NA",paste("unclassified",paste(rep("*",i-1),collapse=""),sep=""),strsp[[i]][1])})
+strsp_s<-sapply(1:10, function(i){ifelse(strsp[[i]][2]=="NA",paste("unclassified",paste(rep("*",i-1),collapse=""),sep=""),strsp[[i]][2])})
+
+top_feat$TaxGS<-paste(strsp_f,strsp_s,sep="_")
+top_feat$TaxGS[5]<-paste(top_feat$TaxGS[5],"*",sep="")
+
+tf_dat<-data.frame(TFname=top_feat$TaxGS,TFloadings= 
+as.numeric(top_feat$Component.8))
+taxa8<-tf_dat %>%
+  ggplot(aes(x=TFloadings,y=reorder(TFname,TFloadings))) + 
+  geom_bar(stat = "identity") +
+  xlab("Feature loading") +
+  ylab("")+
+  ggtitle("")
+```
+
+```{r}
+ggpubr::ggarrange(slplot3,taxa3,singF3,
+                  slplot8dg,taxa8,singF8dg,nrow=2,ncol=3)
+ggsave("Results/cv_ecam_res.pdf",height = 6,width = 12,units = "in")
+```
+
+
+```{r}
+ggpubr::ggarrange(slplot1dg,taxa1,singF1dg,
+                  slplot2,taxa2,singF2,
+                  slplot3dg,taxa3,singF3dg,nrow=3,ncol=3)
+ggsave("ecam_res.pdf",height = 10,width = 12,units = "in")
 ```
 

@@ -17,7 +17,9 @@ supFTSVD(
   smooth = 1e-08,
   maxiter = 20,
   epsilon = 1e-04,
-  KInd = NULL
+  KInd = NULL,
+  rsvd_seed = 100,
+  conv_criteria = "par"
 )
 }
 \arguments{

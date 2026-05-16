@@ -55,18 +55,8 @@ data<-data_gen_supFTSVD(m_i=m_i,Xmatrix = Vmat,Beta = gam,Xi = bval,
                         PsiF = PhiF,sing_val = lmd_val,SubE_Var = Eta2,
                         Data_Var = Tau2,Tgrid = Time)
 
-
-# Reproducibility because of the use of random SVD is controlled by rsvd_seed
-fit_supF<-supFTSVD(datlist = data$data,
-         response = Vmat,
-         interval = NULL,
-         r=2,
-         resolution = 50,
-         CVPhi = TRUE,
-         K = 5,
-         cvT = 2,
-         smooth = exp(seq(-2,2,length.out=10)),
-         maxiter = 100,
-         epsilon = 1e-6,
-         KInd = NULL,rsvd_seed = 25,conv_criteria = "cond_lik")
-
+norm_llik_supFTSVD(datlist=data$data,x_matrix=Vmat,
+                        comp_beta=gam,subj_dev=data$zeta,
+                        feat_loading=bval,sing_func=PhiF,
+                        sing_func_arg=Time,sing_val=lmd_val,
+                        sigR=Eta2,sig=Tau2,smooth_par=0)

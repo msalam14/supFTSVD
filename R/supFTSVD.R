@@ -1017,6 +1017,7 @@ format_ftsvd <- function(taxon_table, time_point, subjectID, threshold=0.95,
 #' @param x represents the observed time points
 #' @param y set of reference points
 #' @noRd
+#' @export
 bernoulli_kernel <- function(x, y){
   k1.x = x-0.5
   k1.y = y-0.5
